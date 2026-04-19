@@ -6,6 +6,21 @@ from datetime import datetime
 import telebot
 from telebot import types
 from functools import wraps
+from flask import Flask
+import threading
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is alive!"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=10000)   # порт 10000 — Render его ожидает
+
+# Запускаем Flask в отдельном потоке, чтобы он не мешал боту
+threading.Thread(target=run_flask, daemon=True).start()
+
 
 # ========== НАСТРОЙКИ ==========
 TOKEN = '8311159073:AAGqEK7o0dKcZYcZyDtyg1XMLGW5vRnVaNc'
