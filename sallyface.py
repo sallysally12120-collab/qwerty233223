@@ -7,8 +7,8 @@ import telebot
 from telebot import types
 from functools import wraps
 from flask import Flask
-import threading
 
+# ========== ВЕБ-СЕРВЕР ДЛЯ RENDER ==========
 app = Flask(__name__)
 
 @app.route('/')
@@ -16,11 +16,9 @@ def home():
     return "Bot is alive!"
 
 def run_flask():
-    app.run(host='0.0.0.0', port=10000)   # порт 10000 — Render его ожидает
+    app.run(host='0.0.0.0', port=10000)
 
-# Запускаем Flask в отдельном потоке, чтобы он не мешал боту
 threading.Thread(target=run_flask, daemon=True).start()
-
 
 # ========== НАСТРОЙКИ ==========
 TOKEN = '8311159073:AAGqEK7o0dKcZYcZyDtyg1XMLGW5vRnVaNc'
@@ -46,7 +44,7 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -110,7 +108,8 @@ def init_db():
             dislikes INTEGER DEFAULT 0,
             status TEXT DEFAULT 'pending',
             post_time TIMESTAMP,
-            as_admin INTEGER DEFAULT 0
+            as_admin INTEGER DEFAULT 0,
+            media_type TEXT DEFAULT 'text'
         )
     ''')
 
@@ -168,7 +167,7 @@ def require_subscription_and_antispam(command_name=None):
                         hours = (remaining % (24 * 3600)) // 3600
                         bot.send_message(message.chat.id, f"❌ Вы забанены на {days} дн. {hours} ч. Доступ запрещён.")
                 return
-            
+
             cmd_name = command_name or (message.text if hasattr(message, 'text') and message.text else 'unknown')
             is_spam, spam_reason = check_command_spam(user_id, cmd_name)
             if is_spam:
@@ -177,7 +176,7 @@ def require_subscription_and_antispam(command_name=None):
                 notify_group(f"<blockquote>🚨 Автоматический бан\nПользователь {user_id}\nПричина: {spam_reason}\nСрок: 10 минут</blockquote>")
                 bot.send_message(message.chat.id, "🚫 Вы забанены на 10 минут за спам командами.")
                 return
-            
+
             if user_id not in ADMIN_IDS and not check_subscription(user_id):
                 markup = types.InlineKeyboardMarkup()
                 markup.add(types.InlineKeyboardButton("🔗 Вступить в канал", url=INVITE_LINK))
@@ -188,7 +187,7 @@ def require_subscription_and_antispam(command_name=None):
                     "После подписки нажмите кнопку «Проверить подписку».",
                     reply_markup=markup)
                 return
-            
+
             return func(message, *args, **kwargs)
         return wrapper
     return decorator
@@ -312,7 +311,7 @@ def ban_user(user_id, duration_days=None, duration_minutes=None, reason="Не у
         duration_seconds = duration_days * 24 * 3600
     else:
         duration_seconds = None
-    
+
     with db_lock:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -494,14 +493,19 @@ def expire_old_requests():
         return count
 
 # ========== ФУНКЦИИ ДЛЯ АНОНИМНЫХ ПОСТОВ ==========
-def save_anonymous_post(user_id, nickname, media_group_id, file_ids, caption, as_admin=False):
+def save_anonymous_post(user_id, nickname, media_group_id, file_ids, caption, as_admin=False, media_type='text'):
     with db_lock:
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO anonymous_posts (user_id, nickname, media_group_id, file_ids, caption, status, post_time, as_admin)
-            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
-        ''', (user_id, nickname, media_group_id, ','.join(file_ids) if isinstance(file_ids, list) else file_ids, caption, int(time.time()), 1 if as_admin else 0))
+            INSERT INTO anonymous_posts 
+            (user_id, nickname, media_group_id, file_ids, caption, status, post_time, as_admin, media_type)
+            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+        ''', (
+            user_id, nickname, media_group_id,
+            ','.join(file_ids) if isinstance(file_ids, list) else file_ids,
+            caption, int(time.time()), 1 if as_admin else 0, media_type
+        ))
         conn.commit()
         post_id = cursor.lastrowid
         conn.close()
@@ -524,7 +528,10 @@ def get_post_by_id(post_id):
     with db_lock:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT id, user_id, nickname, media_group_id, file_ids, caption, status, as_admin FROM anonymous_posts WHERE id = ?', (post_id,))
+        cursor.execute('''
+            SELECT id, user_id, nickname, media_group_id, file_ids, caption, status, as_admin, media_type 
+            FROM anonymous_posts WHERE id = ?
+        ''', (post_id,))
         row = cursor.fetchone()
         conn.close()
         return row
@@ -1260,13 +1267,13 @@ def forward_user_message(message):
         return f"<blockquote>{escape_html(text)}</blockquote>"
 
     content_type = message.content_type
-    
+
     if content_type == 'text':
         bot.send_message(GROUP_ID, f"{user_info}\n\n{make_quote(message.text)}", parse_mode='HTML')
         bot.send_message(message.chat.id, "✅ Сообщение отправлено администраторам.")
         clear_state(user_id, 'awaiting_message')
         return
-    
+
     elif content_type == 'photo':
         media_group_id = message.media_group_id
         if media_group_id:
@@ -1317,7 +1324,7 @@ def forward_user_message(message):
             bot.send_message(message.chat.id, "✅ Сообщение отправлено администраторам.")
             clear_state(user_id, 'awaiting_message')
             return
-    
+
     elif content_type in ['video', 'animation', 'video_note']:
         duration = None
         file_id = None
@@ -1349,7 +1356,7 @@ def forward_user_message(message):
         bot.send_message(message.chat.id, "✅ Сообщение отправлено администраторам.")
         clear_state(user_id, 'awaiting_message')
         return
-    
+
     elif content_type in ['audio', 'voice']:
         caption = message.caption or ""
         quoted = make_quote(caption)
@@ -1364,7 +1371,7 @@ def forward_user_message(message):
         bot.send_message(message.chat.id, "✅ Сообщение отправлено администраторам.")
         clear_state(user_id, 'awaiting_message')
         return
-    
+
     else:
         bot.send_message(message.chat.id,
             "❌ <b>Разрешено отправлять только:</b>\n"
@@ -1386,7 +1393,7 @@ def process_anonymous_post(message, as_admin=False):
 
     user = message.from_user
     username = f"@{user.username}" if user.username else "нет username"
-    
+
     if as_admin:
         user_info = (
             f"👑 <b>ПОСТ ОТ АДМИНИСТРАЦИИ</b>\n"
@@ -1408,15 +1415,15 @@ def process_anonymous_post(message, as_admin=False):
         return f"<blockquote>{escape_html(text)}</blockquote>"
 
     content_type = message.content_type
-    
+
     if content_type == 'text':
-        post_id = save_anonymous_post(user_id, nick, None, '', message.text, as_admin)
+        post_id = save_anonymous_post(user_id, nick, None, '', message.text, as_admin, media_type='text')
         quoted = make_quote(message.text)
         bot.send_message(GROUP_ID, f"{user_info}\n\n{quoted}", parse_mode='HTML', reply_markup=get_post_moderation_keyboard(post_id))
         bot.send_message(message.chat.id, "✅ Ваш пост отправлен на модерацию.")
         clear_state(user_id, 'awaiting_anonymous_post')
         return
-    
+
     elif content_type == 'photo':
         media_group_id = message.media_group_id
         if media_group_id:
@@ -1448,7 +1455,7 @@ def process_anonymous_post(message, as_admin=False):
                         del user_media_groups[mg_id]
                         clear_state(u_id, 'awaiting_anonymous_post')
                         return
-                    post_id = save_anonymous_post(u_id, nick, mg_id, photos, caption, as_admin)
+                    post_id = save_anonymous_post(u_id, nick, mg_id, photos, caption, as_admin, media_type='photo')
                     quoted = make_quote(caption)
                     if len(photos) == 1:
                         bot.send_photo(GROUP_ID, photos[0], caption=f"{u_info}\n\n{quoted}", parse_mode='HTML', reply_markup=get_post_moderation_keyboard(post_id))
@@ -1469,14 +1476,14 @@ def process_anonymous_post(message, as_admin=False):
                 threading.Thread(target=process_media_group, args=(media_group_id,), daemon=True).start()
             return
         else:
-            post_id = save_anonymous_post(user_id, nick, None, [message.photo[-1].file_id], message.caption or "", as_admin)
+            post_id = save_anonymous_post(user_id, nick, None, [message.photo[-1].file_id], message.caption or "", as_admin, media_type='photo')
             caption = message.caption or ""
             quoted = make_quote(caption)
             bot.send_photo(GROUP_ID, message.photo[-1].file_id, caption=f"{user_info}\n\n{quoted}", parse_mode='HTML', reply_markup=get_post_moderation_keyboard(post_id))
             bot.send_message(message.chat.id, "✅ Ваш пост отправлен на модерацию.")
             clear_state(user_id, 'awaiting_anonymous_post')
             return
-    
+
     elif content_type in ['video', 'animation']:
         duration = None
         file_id = None
@@ -1490,7 +1497,7 @@ def process_anonymous_post(message, as_admin=False):
             bot.send_message(message.chat.id, "❌ Видео должно быть не длиннее 40 секунд.")
             clear_state(user_id, 'awaiting_anonymous_post')
             return
-        post_id = save_anonymous_post(user_id, nick, None, [file_id], message.caption or "", as_admin)
+        post_id = save_anonymous_post(user_id, nick, None, [file_id], message.caption or "", as_admin, media_type='video')
         caption = message.caption or ""
         quoted = make_quote(caption)
         if content_type == 'video':
@@ -1500,7 +1507,7 @@ def process_anonymous_post(message, as_admin=False):
         bot.send_message(message.chat.id, "✅ Ваш пост отправлен на модерацию.")
         clear_state(user_id, 'awaiting_anonymous_post')
         return
-    
+
     else:
         bot.send_message(message.chat.id,
             "❌ <b>Разрешено отправлять только:</b>\n"
@@ -1881,7 +1888,12 @@ def callback_handler(call):
         if not post:
             bot.answer_callback_query(call.id, "Пост не найден")
             return
-        pid, puid, pnick, pmedia_group, pfile_ids, pcaption, pstatus, pas_admin = post
+        # Распаковка с учётом нового поля media_type
+        if len(post) >= 9:
+            pid, puid, pnick, pmedia_group, pfile_ids, pcaption, pstatus, pas_admin, media_type = post
+        else:
+            pid, puid, pnick, pmedia_group, pfile_ids, pcaption, pstatus, pas_admin = post
+            media_type = 'text'  # fallback для старых записей
         if pstatus != 'pending':
             bot.answer_callback_query(call.id, f"Пост уже обработан ({pstatus})")
             return
@@ -1889,62 +1901,87 @@ def callback_handler(call):
         if action == 'approve':
             file_ids = pfile_ids.split(',') if pfile_ids else []
             reputation = get_user_reputation(puid)
-            
+            safe_nick = escape_html(pnick)
+
+            # Заголовок
             if pas_admin:
                 channel_header = (
                     f"👑 <b>АДМИНИСТРАЦИЯ</b>\n"
                     f"<code>{'─' * 20}</code>\n"
-                    f"👤 {pnick}  │  🆔 <code>{puid}</code>\n"
+                    f"👤 {safe_nick}  │  🆔 <code>{puid}</code>\n"
                 )
             else:
                 channel_header = (
                     f"<b>📢 Анонимный шепотом вещает..</b>\n"
                     f"<code>{'─' * 20}</code>\n"
-                    f"👤 Пользователь \"<i>{pnick}</i>\" пишет:\n"
+                    f"👤 Пользователь \"<i>{safe_nick}</i>\" пишет:\n"
                 )
             channel_header += f"🥇 Репутация: {reputation}\n"
             channel_header += f"<code>{'─' * 20}</code>"
 
-            def make_quote(text):
-                if not text:
-                    return ""
-                return f"<blockquote>{escape_html(text)}</blockquote>"
+            safe_caption = escape_html(pcaption) if pcaption else ""
+            MAX_CAPTION_LEN = 1024
+            header_len = len(channel_header) + 4
+            max_text_len = MAX_CAPTION_LEN - header_len
+            if max_text_len < 10:
+                max_text_len = 200
+            if len(safe_caption) > max_text_len:
+                safe_caption = safe_caption[:max_text_len - 3] + "..."
+            if safe_caption:
+                full_text = f"{channel_header}\n\n<blockquote>{safe_caption}</blockquote>"
+            else:
+                full_text = channel_header
+            if len(full_text) > MAX_CAPTION_LEN:
+                full_text = full_text[:MAX_CAPTION_LEN - 3] + "..."
 
             try:
                 sent_messages = []
-                if not file_ids or (len(file_ids) == 1 and not file_ids[0]):
-                    full_text = f"{channel_header}\n\n{make_quote(pcaption)}"
-                    msg = bot.send_message(CHANNEL_ID, full_text, parse_mode='HTML', reply_markup=get_vote_keyboard(post_id))
+                if media_type == 'text' or not file_ids or (len(file_ids) == 1 and not file_ids[0]):
+                    msg = bot.send_message(CHANNEL_ID, full_text, parse_mode='HTML',
+                                           reply_markup=get_vote_keyboard(post_id))
                     sent_messages.append(msg.message_id)
-                elif len(file_ids) == 1:
-                    fid = file_ids[0]
-                    full_text = f"{channel_header}\n\n{make_quote(pcaption)}"
-                    msg = bot.send_photo(CHANNEL_ID, fid, caption=full_text, parse_mode='HTML', reply_markup=get_vote_keyboard(post_id))
-                    sent_messages.append(msg.message_id)
+                elif media_type == 'photo':
+                    if len(file_ids) == 1:
+                        msg = bot.send_photo(CHANNEL_ID, file_ids[0], caption=full_text,
+                                             parse_mode='HTML', reply_markup=get_vote_keyboard(post_id))
+                        sent_messages.append(msg.message_id)
+                    else:
+                        media_list = []
+                        for i, fid in enumerate(file_ids):
+                            if i == 0:
+                                media_list.append(types.InputMediaPhoto(fid, caption=full_text, parse_mode='HTML'))
+                            else:
+                                media_list.append(types.InputMediaPhoto(fid))
+                        msgs = bot.send_media_group(CHANNEL_ID, media_list)
+                        sent_messages = [msg.message_id for msg in msgs]
+                        if sent_messages:
+                            bot.edit_message_reply_markup(CHANNEL_ID, sent_messages[0],
+                                                          reply_markup=get_vote_keyboard(post_id))
+                elif media_type == 'video':
+                    if file_ids:
+                        msg = bot.send_video(CHANNEL_ID, file_ids[0], caption=full_text,
+                                             parse_mode='HTML', reply_markup=get_vote_keyboard(post_id))
+                        sent_messages.append(msg.message_id)
+                    else:
+                        raise Exception("Видеофайл не найден")
                 else:
-                    media_list = []
-                    for i, fid in enumerate(file_ids):
-                        if i == 0:
-                            media_list.append(types.InputMediaPhoto(fid, caption=f"{channel_header}\n\n{make_quote(pcaption)}" if pcaption else channel_header, parse_mode='HTML'))
-                        else:
-                            media_list.append(types.InputMediaPhoto(fid))
-                    msgs = bot.send_media_group(CHANNEL_ID, media_list)
-                    sent_messages = [msg.message_id for msg in msgs]
-                    if sent_messages:
-                        bot.edit_message_reply_markup(CHANNEL_ID, sent_messages[0], reply_markup=get_vote_keyboard(post_id))
+                    raise Exception(f"Неизвестный тип медиа: {media_type}")
 
                 if sent_messages:
                     update_post_status(post_id, 'approved', sent_messages)
                     bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
                     bot.send_message(call.message.chat.id, f"✅ Пост #{post_id} одобрен и опубликован.")
                     try:
-                        bot.send_message(puid, f"✅ Ваш анонимный пост одобрен и опубликован в канале!")
+                        bot.send_message(puid, "✅ Ваш анонимный пост одобрен и опубликован в канале!")
                     except: pass
                 else:
-                    bot.answer_callback_query(call.id, "Ошибка публикации")
+                    raise Exception("Не удалось отправить ни одного сообщения")
+
             except Exception as e:
-                print(f"Ошибка публикации: {e}")
-                bot.answer_callback_query(call.id, "Ошибка публикации в канал")
+                error_msg = f"❌ Ошибка публикации поста #{post_id}:\n{str(e)[:200]}"
+                print(f"!!! ОШИБКА ПУБЛИКАЦИИ: {e}")
+                bot.answer_callback_query(call.id, "Ошибка публикации")
+                bot.send_message(call.message.chat.id, error_msg)
         else:
             update_post_status(post_id, 'rejected')
             bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
