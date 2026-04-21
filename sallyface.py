@@ -2070,75 +2070,127 @@ def callback_handler(call):
 
     # Быстрые действия над пользователем из админки
     if data.startswith('admin_quickban_'):
-        if user_id not in ADMIN_IDS: return
+        if user_id not in ADMIN_IDS:
+            bot.answer_callback_query(call.id, "Нет прав")
+            return
         parts = data.split('_')
+        if len(parts) < 5:
+            bot.answer_callback_query(call.id, "❌ Неверные данные")
+            return
         target_id = int(parts[3])
         duration_str = parts[4]
+
         if duration_str == '1':
             days = 1
         elif duration_str == '7':
             days = 7
-        else:
+        elif duration_str == 'perm':
             days = None
+        else:
+            bot.answer_callback_query(call.id, "Неизвестный срок")
+            return
+
         is_violation, _ = check_untouchable(target_id, user_id, "бан")
         if is_violation:
             bot.answer_callback_query(call.id, "❌ Нельзя забанить неприкасаемого!")
             return
         if target_id in ADMIN_IDS and target_id != user_id:
             handle_admin_vs_admin_ban(user_id, target_id, "Быстрый бан")
-            bot.edit_message_text(f"❌ Вы попытались забанить администратора. Оба забанены.", call.message.chat.id, call.message.message_id)
+            bot.edit_message_text(
+                f"❌ Вы попытались забанить администратора. Оба забанены.",
+                call.message.chat.id, call.message.message_id
+            )
+            bot.answer_callback_query(call.id, "Администратор забанен")
             return
+
         success, error = ban_user(target_id, duration_days=days, reason="Быстрый бан", banned_by=user_id)
         if success:
             bot.answer_callback_query(call.id, f"✅ Пользователь {target_id} забанен")
             nick = get_user_nickname(target_id) or "не установлен"
             rep = get_user_reputation(target_id)
             text = f"👤 Информация о пользователе:\n\nID: {target_id}\nНик: {nick}\nРепутация: {rep}"
-            bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                                  reply_markup=get_admin_user_actions_keyboard(target_id))
+            bot.edit_message_text(
+                text,
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=get_admin_user_actions_keyboard(target_id)
+            )
         else:
             bot.answer_callback_query(call.id, f"❌ {error}")
 
     elif data.startswith('admin_quickmsg_'):
-        if user_id not in ADMIN_IDS: return
-        target_id = int(data.split('_')[3])
+        if user_id not in ADMIN_IDS:
+            bot.answer_callback_query(call.id, "Нет прав")
+            return
+        parts = data.split('_')
+        if len(parts) < 4:
+            return
+        target_id = int(parts[3])
+
         set_state(user_id, 'awaiting_msg_user_target', True)
         set_state(user_id, 'quick_msg_target', target_id)
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⬅️ Отмена", callback_data=f'admin_user_{target_id}'))
-        bot.edit_message_text(f"Введите сообщение для пользователя {target_id}:", 
-                              call.message.chat.id, call.message.message_id, reply_markup=markup)
+        bot.edit_message_text(
+            f"✏️ Введите сообщение для пользователя {target_id}:",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+        bot.answer_callback_query(call.id)
 
     elif data.startswith('admin_quickremove_'):
-        if user_id not in ADMIN_IDS: return
-        target_id = int(data.split('_')[3])
+        if user_id not in ADMIN_IDS:
+            bot.answer_callback_query(call.id, "Нет прав")
+            return
+        parts = data.split('_')
+        if len(parts) < 4:
+            return
+        target_id = int(parts[3])
+
         is_violation, _ = check_untouchable(target_id, user_id, "удаление ника")
         if is_violation:
             bot.answer_callback_query(call.id, "❌ Нельзя удалить ник неприкасаемого!")
             return
+
         if remove_user_nickname(target_id):
             bot.answer_callback_query(call.id, f"✅ Ник пользователя {target_id} удалён")
             nick = "не установлен"
             rep = get_user_reputation(target_id)
             text = f"👤 Информация о пользователе:\n\nID: {target_id}\nНик: {nick}\nРепутация: {rep}"
-            bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                                  reply_markup=get_admin_user_actions_keyboard(target_id))
+            bot.edit_message_text(
+                text,
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=get_admin_user_actions_keyboard(target_id)
+            )
         else:
             bot.answer_callback_query(call.id, "❌ Не удалось удалить ник")
 
     elif data.startswith('admin_quickunban_'):
-        if user_id not in ADMIN_IDS: return
-        target_id = int(data.split('_')[3])
+        if user_id not in ADMIN_IDS:
+            bot.answer_callback_query(call.id, "Нет прав")
+            return
+        parts = data.split('_')
+        if len(parts) < 4:
+            return
+        target_id = int(parts[3])
+
         if target_id == UNTOUCHABLE_USER_ID and user_id != UNTOUCHABLE_USER_ID:
             bot.answer_callback_query(call.id, "❌ Владелец не может быть разбанен")
             return
+
         unban_user(target_id)
         bot.answer_callback_query(call.id, f"✅ Бан с {target_id} снят")
         nick = get_user_nickname(target_id) or "не установлен"
         rep = get_user_reputation(target_id)
         text = f"👤 Информация о пользователе:\n\nID: {target_id}\nНик: {nick}\nРепутация: {rep}"
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
-                              reply_markup=get_admin_user_actions_keyboard(target_id))
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=get_admin_user_actions_keyboard(target_id)
+        )
 
     elif data.startswith('ban_dur_'):
         if user_id not in ADMIN_IDS: return
